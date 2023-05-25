@@ -1,0 +1,89 @@
+name: TorrDLoader
+
+run-name: "TorrDLoader for ${{ inputs.JobDestType }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      TorrentURL:
+        description: "TorrentURL, https://site.address/file.torrent"
+        required: false
+        type: string
+      MagnetURI:
+        description: "MagnetURI, magnet:?xt=urn:btih:HASH&dn=NAME&tr=TRACKER"
+        required: false
+        type: string
+      FileIdx:
+        description: "FileIdx, Range of Files in Torrent"
+        required: false
+        type: string
+      JobDestType:
+        description: "Destination, AniMaze or Public"
+        required: true
+        type: choice
+        options:
+        - "AniMaze"
+        - "Public"
+      CustomEnvs:
+        description: "Custom Env Vars (pipe-separated), x=a|y=2"
+        type: string
+        required: false
+      CleanWS:
+        description: "Clean Workspace with slimhub_actions"
+        type: boolean
+        default: false
+        required: false
+
+env:
+  TorrentURL: ${{ github.event.inputs.TorrentURL }}
+  MagnetURI: ${{ github.event.inputs.MagnetURI }}
+  FileIdx: ${{ github.event.inputs.FileIdx }}
+  JobDestType: ${{ github.event.inputs.JobDestType }}
+  CustomEnvs: ${{ github.event.inputs.CustomEnvs }}
+  TorrDLoader_Hash: ${{ secrets.TorrDLoader_Hash }}
+  RCLONE_CONFIG_HASH: ${{ secrets.RCLONE_CONFIG_HASH }}
+
+jobs:
+  transloader:
+    name: "Torrent Downloader"
+    runs-on: ubuntu-22.04
+
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          ref: 'main'
+      - name: GitHub Auth
+        uses: rokibhasansagar/custom_workflows/git_config@main
+        with:
+          credential: "yes"
+          git_cookies: "no"
+        env:
+          PAT: ${{ secrets.GH_TOKEN }}
+      - name: Clean Workspace with slimhub_actions
+        if: github.event.inputs.CleanWS == 'true'
+        uses: rokibhasansagar/slimhub_actions@main
+        with:
+          retain: "docker_buildkit"
+      - name: Run TorrDLoader Script
+        run: |
+          # Prepare Custom Env Var Overrides
+          if [[ ${CustomEnvs} != '' ]]; then
+            for i in $(sed 's/|/\n/g' <<<"${CustomEnvs}"); do
+              v=$(awk -F'=' '{print $1}' <<<"${i}")
+              w=$(cut -d'=' -f2- <<<"${i}" | sed 's#"##g')
+              echo $v="$w" && export $v=$w
+            done
+          fi
+          unset v w 2>/dev/null || true
+          # Execute Script Stealthly
+          eval 'set -eo pipefail' 2>/dev/null
+          eval 'set +o history' 2>/dev/null
+          export latestRevision=$(curl -sL "https://gist.github.com/rokibhasansagar/${TorrDLoader_Hash}/" | grep "/README\.md" | awk -F'/raw/' '{print $2}' | awk -F'/' '{print $1}')
+          case "${JobDestType}" in
+          "AniMaze") export ScriptName="Torrent2AniMaze.sh" ;;
+          "Public") export ScriptName="Torrent2Public.sh" ;;
+          esac
+          curl -fsSL "https://gist.github.com/rokibhasansagar/${TorrDLoader_Hash}/raw/${latestRevision}/${ScriptName}" -O
+          source ./${ScriptName}
+          eval 'set -o history' 2>/dev/null
+
