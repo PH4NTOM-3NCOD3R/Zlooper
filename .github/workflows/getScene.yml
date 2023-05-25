@@ -1,0 +1,75 @@
+name: SCDetector
+
+run-name: "${{ inputs.AnimeName }} VapourSceneDetect for ${{ inputs.EpLabels }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      AnimeName:
+        description: "Anime Show Name"
+        required: true
+        type: string
+      EpLabels:
+        description: "One or Multiple EpLabel, `+`-separated, S0[0-9]E[0-9][0-9]"
+        required: true
+        type: string
+        default: "S01E01"
+      CustomEnvs:
+        description: "Custom Env Vars (pipe-separated), x=a|y=2"
+        type: string
+        required: false
+      CleanWS:
+        description: "Clean Workspace with slimhub_actions"
+        type: boolean
+        default: false
+        required: false
+
+env:
+  AnimeName: ${{ github.event.inputs.AnimeName }}
+  EpLabels: ${{ github.event.inputs.EpLabels }}
+  CustomEnvs: ${{ github.event.inputs.CustomEnvs }}
+  SCDetect_ScrHash: ${{ secrets.SCDetect_ScrHash }}
+  RCLONE_CONFIG_HASH: ${{ secrets.RCLONE_CONFIG_HASH }}
+
+jobs:
+  scdetect:
+    name: "SCDetector"
+    runs-on: ubuntu-22.04
+
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          ref: 'main'
+      - name: GitHub Auth
+        uses: rokibhasansagar/custom_workflows/git_config@main
+        with:
+          credential: "yes"
+          git_cookies: "no"
+        env:
+          PAT: ${{ secrets.GH_TOKEN }}
+      - name: Clean Workspace with slimhub_actions
+        if: github.event.inputs.CleanWS == 'true'
+        uses: rokibhasansagar/slimhub_actions@main
+        with:
+          retain: "docker_buildkit"
+      - name: Run SCDetect Script
+        run: |
+          # Prepare Custom Env Var Overrides
+          if [[ ${CustomEnvs} != '' ]]; then
+            for i in $(sed 's/|/\n/g' <<<"${CustomEnvs}"); do
+              v=$(awk -F'=' '{print $1}' <<<"${i}")
+              w=$(cut -d'=' -f2- <<<"${i}" | sed 's#"##g')
+              echo $v="$w" && export $v=$w
+            done
+          fi
+          unset v w 2>/dev/null || true
+          # Execute Script Stealthly
+          eval 'set -eo pipefail' 2>/dev/null
+          eval 'set +o history' 2>/dev/null
+          export latestRevision=$(curl -sL "https://gist.github.com/rokibhasansagar/${SCDetect_ScrHash}/" | grep "/get\.SceneJSON\.sh" | awk -F'/raw/' '{print $2}' | awk -F'/' '{print $1}')
+          curl -fsSL "https://gist.github.com/rokibhasansagar/${SCDetect_ScrHash}/raw/${latestRevision}/get.SceneJSON.sh" -O
+          curl -fsSL "https://gist.github.com/rokibhasansagar/${SCDetect_ScrHash}/raw/${latestRevision}/put.MLBPatcher.sh" -O
+          source ./put.MLBPatcher.sh
+          source ./get.SceneJSON.sh
+          eval 'set -o history' 2>/dev/null
+
