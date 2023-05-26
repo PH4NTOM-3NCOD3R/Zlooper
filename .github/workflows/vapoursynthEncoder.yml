@@ -1,0 +1,316 @@
+name: VapourCod3r Beta
+
+run-name: "${{ inputs.EpLabel }} ${{ inputs.VidRes }} - Q${{ inputs.QScale }}/CPU${{ inputs.EncSpeed }} - ${{ inputs.AnimeName }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      AnimeName:
+        description: "AnimeName"
+        required: true
+        type: choice
+        options:
+        - "Oshi.no.Ko"
+        - "Heavenly.Delusion"
+        - "Hells.Paradise.Jigokuraku"
+        - "Insomniacs.After.School"
+        - "Miraculous.Tales.of.Ladybug.and.Cat.Noir"
+      EpLabel:
+        description: "EpLabel, S0[0-9]E[0-9][0-9]"
+        required: true
+        type: string
+        default: "S01E01"
+      EncSpeed:
+        description: "EncSpeed"
+        required: true
+        type: choice
+        options:
+        - "2"
+        - "3"
+        - "4"
+        - "1"
+      QScale:
+        description: "QScale, 13~46"
+        required: true
+        type: number
+      VidRes:
+        description: "VidRes, 576p || 1024x576"  # AR = 16/9
+        required: true
+        type: string
+        default: "576p"
+      CustomEnvs:
+        description: "Env Vars Overrides (pipe-separated), x=a|y=2"
+        type: string
+        required: false
+      ForceRecode:
+        description: "ForceRecode Previous Chunks"
+        required: true
+        type: boolean
+        default: false
+      MergeOnly:
+        description: "Only Merge Previously Encoded File"
+        required: false
+        type: boolean
+        default: false
+      CleanWS:
+        description: "Clean Uploader WS with slimhub_actions"
+        type: boolean
+        default: false
+        required: false
+
+env:
+  AnimeName: ${{ github.event.inputs.AnimeName }}
+  EpLabel: ${{ github.event.inputs.EpLabel }}
+  EncSpeed: ${{ github.event.inputs.EncSpeed }}
+  QScale: ${{ github.event.inputs.QScale }}
+  VidRes: ${{ github.event.inputs.VidRes }}
+  CustomEnvs: ${{ github.event.inputs.CustomEnvs }}
+  ForceRecode: ${{ github.event.inputs.ForceRecode }}
+  MergeOnly: ${{ github.event.inputs.MergeOnly }}
+  VapourCod3r_Hash: ${{ secrets.VapourCod3r_ZHash }}
+  RCLONE_CONFIG_HASH: ${{ secrets.RCLONE_CONFIG_HASH }}
+
+jobs:
+  generator:
+    name: "Job Matrix Preparation"
+    if: github.event.inputs.MergeOnly != 'true'
+    runs-on: ubuntu-22.04
+
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+      artchunk: ${{ steps.set-artmatrix.outputs.artchunk }}
+      artmatrix: ${{ steps.set-artmatrix.outputs.artmatrix }}
+
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          ref: 'main'
+      - name: GitHub Auth
+        uses: rokibhasansagar/custom_workflows/git_config@main
+        env:
+          PAT: ${{ secrets.GH_TOKEN }}
+      - name: Create EncMatrix
+        id: set-matrix
+        run: |
+          # Prepare Custom Env Var Overrides
+          if [[ ${CustomEnvs} != '' ]]; then
+            for i in $(sed 's/|/\n/g' <<<"${CustomEnvs}"); do
+              v=$(awk -F'=' '{print $1}' <<<"${i}")
+              w=$(cut -d'=' -f2- <<<"${i}" | sed 's#"##g')
+              echo $v="$w" && export $v=$w
+            done
+          fi
+          unset v w 2>/dev/null || true
+          # Execute Script Stealthly
+          eval 'set -eo pipefail' 2>/dev/null
+          eval 'set +o history' 2>/dev/null
+          # Get GIST latest Revision number
+          export latestRevision=$(curl -sL "https://gist.github.com/rokibhasansagar/${VapourCod3r_Hash}/" | grep "/matrixGen\.sh" | awk -F'/raw/' '{print $2}' | awk -F'/' '{print $1}')
+          # Get Workflow Matrix Script
+          curl -sL "https://gist.github.com/rokibhasansagar/${VapourCod3r_Hash}/raw/${latestRevision}/matrixGen.sh" -O
+          # Get and Run Conditional Script Patcher
+          curl -sL "https://gist.github.com/rokibhasansagar/${VapourCod3r_Hash}/raw/${latestRevision}/scriptPatcher.sh" -O
+          source ./scriptPatcher.sh && rm ./scriptPatcher.sh
+          # Generate Workflow Matrix
+          source ./matrixGen.sh
+          eval 'set -o history' 2>/dev/null
+      - name: Get artchunk and artmatrix
+        id: set-artmatrix
+        run: |
+          # Prepare Custom Env Var Overrides
+          if [[ ${CustomEnvs} != '' ]]; then
+            for i in $(sed 's/|/\n/g' <<<"${CustomEnvs}"); do
+              v=$(awk -F'=' '{print $1}' <<<"${i}")
+              w=$(cut -d'=' -f2- <<<"${i}" | sed 's#"##g')
+              echo $v="$w" && export $v=$w
+            done
+          fi
+          unset v w 2>/dev/null || true
+          # Execute Script Stealthly
+          eval 'set -eo pipefail' 2>/dev/null
+          eval 'set +o history' 2>/dev/null
+          # Get GIST latest Revision number
+          export latestRevision=$(curl -sL "https://gist.github.com/rokibhasansagar/${VapourCod3r_Hash}/" | grep "/matrixGen\.sh" | awk -F'/raw/' '{print $2}' | awk -F'/' '{print $1}')
+          # Get Artifactory Matrix Script
+          curl -sL "https://gist.github.com/rokibhasansagar/${VapourCod3r_Hash}/raw/${latestRevision}/artGen.sh" -O
+          # Get and Run Conditional Script Patcher
+          curl -sL "https://gist.github.com/rokibhasansagar/${VapourCod3r_Hash}/raw/${latestRevision}/scriptPatcher.sh" -O
+          source ./scriptPatcher.sh && rm ./scriptPatcher.sh
+          # Generate Artifactory Matrix
+          source ./artGen.sh
+          eval 'set -o history' 2>/dev/null
+
+  uploader:
+    name: "Vapour Artifactory"
+    if: github.event.inputs.MergeOnly != 'true'
+    runs-on: ubuntu-22.04
+    needs: generator
+
+    strategy:
+      fail-fast: true
+      max-parallel: 8
+      matrix:
+        artnum: ${{fromJson(needs.generator.outputs.artmatrix)}}
+
+    env:
+      artnum: ${{ matrix.artnum }}
+      artchunk: ${{ needs.generator.outputs.artchunk }}
+
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          ref: 'main'
+      - name: GitHub Auth
+        uses: rokibhasansagar/custom_workflows/git_config@main
+        env:
+          PAT: ${{ secrets.GH_TOKEN }}
+      - name: Clean Workspace with slimhub_actions
+        if: github.event.inputs.CleanWS == 'true'
+        continue-on-error: true
+        uses: rokibhasansagar/slimhub_actions@main
+      - name: Download Media and Split into Parts
+        run: |
+          # Prepare Custom Env Var Overrides
+          if [[ ${CustomEnvs} != '' ]]; then
+            for i in $(sed 's/|/\n/g' <<<"${CustomEnvs}"); do
+              v=$(awk -F'=' '{print $1}' <<<"${i}")
+              w=$(cut -d'=' -f2- <<<"${i}" | sed 's#"##g')
+              echo $v="$w" && export $v=$w
+            done
+          fi
+          unset v w 2>/dev/null || true
+          # Execute Script Stealthly
+          eval 'set -eo pipefail' 2>/dev/null
+          eval 'set +o history' 2>/dev/null
+          # Get GIST latest Revision number
+          export latestRevision=$(curl -sL "https://gist.github.com/rokibhasansagar/${VapourCod3r_Hash}/" | grep "/matrixGen\.sh" | awk -F'/raw/' '{print $2}' | awk -F'/' '{print $1}')
+          # Get Artifact Spliiter Script
+          curl -sL "https://gist.github.com/rokibhasansagar/${VapourCod3r_Hash}/raw/${latestRevision}/splitGen.sh" -O
+          # Get and Run Conditional Script Patcher
+          curl -sL "https://gist.github.com/rokibhasansagar/${VapourCod3r_Hash}/raw/${latestRevision}/scriptPatcher.sh" -O
+          source ./scriptPatcher.sh && rm ./scriptPatcher.sh
+          # Generate Artifact Splits
+          source ./splitGen.sh
+          eval 'set -o history' 2>/dev/null
+      - name: Upload Source Media as Artifact
+        uses: actions/upload-artifact@v3
+        continue-on-error: true
+        with:
+          name: artifact
+          path: ~/data/${{env.AnimeName}}.${{env.EpLabel}}.SOURCE.mkv.${{env.artnum}}
+          retention-days: 3
+      - name: Upload Source Media as Artifact
+        if: failure()
+        uses: actions/upload-artifact@v3
+        with:
+          name: artifact
+          path: ~/data/${{env.AnimeName}}.${{env.EpLabel}}.SOURCE.mkv.${{env.artnum}}
+          retention-days: 3
+
+  synthesizer:
+    name: "Vapour Synthesizer"
+    if: github.event.inputs.MergeOnly != 'true' && ( !cancelled() || success() )
+    runs-on: ubuntu-22.04
+    needs: [generator, uploader]
+
+    strategy:
+      fail-fast: false
+      max-parallel: 16
+      matrix:
+        ChunkID: ${{fromJson(needs.generator.outputs.matrix)}}
+    env:
+      ChunkID: ${{ matrix.ChunkID }}
+
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          ref: 'main'
+      - name: GitHub Auth
+        uses: rokibhasansagar/custom_workflows/git_config@main
+        env:
+          PAT: ${{ secrets.GH_TOKEN }}
+      - name: Download Source Media from Artifact
+        uses: actions/download-artifact@v3
+        with:
+          name: artifact
+          path: ~/data/artifact/
+      - name: VapourCod3r - Chunk ${{env.ChunkID}} from ${{env.AnimeName}} ${{env.EpLabel}}
+        run: |
+          # Prepare Custom Env Var Overrides
+          if [[ ${CustomEnvs} != '' ]]; then
+            for i in $(sed 's/|/\n/g' <<<"${CustomEnvs}"); do
+              v=$(awk -F'=' '{print $1}' <<<"${i}")
+              w=$(cut -d'=' -f2- <<<"${i}" | sed 's#"##g')
+              echo $v="$w" && export $v=$w
+            done
+          fi
+          unset v w 2>/dev/null || true
+          # Execute Script Stealthly
+          eval 'set -eo pipefail' 2>/dev/null
+          eval 'set +o history' 2>/dev/null
+          # Get GIST latest Revision number
+          export latestRevision=$(curl -sL "https://gist.github.com/rokibhasansagar/${VapourCod3r_Hash}/" | grep "/vapourGen\.sh" | awk -F'/raw/' '{print $2}' | awk -F'/' '{print $1}')
+          # Get All-in-one VapourCod3r Script
+          curl -sL "https://gist.github.com/rokibhasansagar/${VapourCod3r_Hash}/raw/${latestRevision}/vapourGen.sh" -O
+          # Get and Run Conditional Script Patcher
+          curl -sL "https://gist.github.com/rokibhasansagar/${VapourCod3r_Hash}/raw/${latestRevision}/scriptPatcher.sh" -O
+          source ./scriptPatcher.sh && rm ./scriptPatcher.sh
+          # All-in-one Script for VapourCod3r vapourGen
+          source ./vapourGen.sh
+          eval 'set -o history' 2>/dev/null
+      - name: Upload Av1an Error Log as Artifact
+        if: failure()
+        uses: actions/upload-artifact@v3
+        with:
+          path: ~/data/enclog.log
+          name: enclog.${{env.ChunkID}}
+          if-no-files-found: ignore
+          retention-days: 1
+
+  merger:
+    name: "Synthesized Video Joiner"
+    if: ( github.event.inputs.MergeOnly == 'true' && !cancelled() ) || success()
+    runs-on: ubuntu-22.04
+    needs: [generator, synthesizer]
+
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          ref: 'main'
+      - name: GitHub Auth
+        uses: rokibhasansagar/custom_workflows/git_config@main
+        env:
+          PAT: ${{ secrets.GH_TOKEN }}
+      - name: Joiner for VapourCod3d ${{env.AnimeName}} ${{env.EpLabel}}
+        run: |
+          # Prepare Custom Env Var Overrides
+          if [[ ${CustomEnvs} != '' ]]; then
+            for i in $(sed 's/|/\n/g' <<<"${CustomEnvs}"); do
+              v=$(awk -F'=' '{print $1}' <<<"${i}")
+              w=$(cut -d'=' -f2- <<<"${i}" | sed 's#"##g')
+              echo $v="$w" && export $v=$w
+            done
+          fi
+          unset v w 2>/dev/null || true
+          # Execute Script Stealthly
+          eval 'set -eo pipefail' 2>/dev/null
+          eval 'set +o history' 2>/dev/null
+          # Get GIST latest Revision number
+          export latestRevision=$(curl -sL "https://gist.github.com/rokibhasansagar/${VapourCod3r_Hash}/" | grep "/xJoiner\.sh" | awk -F'/raw/' '{print $2}' | awk -F'/' '{print $1}')
+          # Get VapourCod3r xJoiner Script
+          curl -sL "https://gist.github.com/rokibhasansagar/${VapourCod3r_Hash}/raw/${latestRevision}/xJoiner.sh" -O
+          # Get and Run Conditional Script Patcher
+          curl -sL "https://gist.github.com/rokibhasansagar/${VapourCod3r_Hash}/raw/${latestRevision}/scriptPatcher.sh" -O
+          source ./scriptPatcher.sh && rm ./scriptPatcher.sh
+          # VapourCod3r xJoiner for Final Encoded Video
+          source ./xJoiner.sh
+          eval 'set -o history' 2>/dev/null
+      - name: Upload VapourCod3d Video Stream as Artifact
+        if: success()
+        uses: actions/upload-artifact@v3
+        with:
+          path: ~/data/${{env.AnimeName}}.${{env.EpLabel}}.*.AV1-fr3aky.mkv   # Match ${FinalEncodedVideo} name
+          name: ${{env.AnimeName}}.${{env.EpLabel}}.Q${{env.QScale}}.VapourCod3d.Result
+          if-no-files-found: warn
+          retention-days: 2
+
