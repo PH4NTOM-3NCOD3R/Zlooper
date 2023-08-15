@@ -67,7 +67,7 @@ env:
   CustomEnvs: ${{ github.event.inputs.CustomEnvs }}
   ForceRecode: ${{ github.event.inputs.ForceRecode }}
   MergeOnly: ${{ github.event.inputs.MergeOnly }}
-  VapourCod3r_Hash: ${{ secrets.VapourCod3r_ZHash }}
+  VapourCod3r_Hash: ${{ secrets.VapourCod3r_ZHash3 }}
   RCLONE_CONFIG_HASH: ${{ secrets.RCLONE_CONFIG_HASH }}
 
 jobs:
