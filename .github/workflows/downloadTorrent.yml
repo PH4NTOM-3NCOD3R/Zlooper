@@ -18,23 +18,21 @@ on:
         required: false
         type: string
       JobDestType:
-        description: "Destination, AniMaze or Public"
+        description: "Destination, Public / ShareZone/ AniMaze"
         required: true
         type: choice
         options:
-        - "AniMaze"
         - "Public"
+        - "ShareZone"
+        - "AniMaze"
       CustomEnvs:
         description: "Custom Env Vars (pipe-separated), x=a|y=2"
         type: string
         required: false
-      CleanWS:
-        description: "Clean Workspace with slimhub_actions"
-        type: boolean
-        default: false
-        required: false
+
 
 env:
+  baseScrAddr: "https://gist.github.com/rokibhasansagar/defcf75ce810fa40ac6200d089de969b"
   TorrentURL: ${{ github.event.inputs.TorrentURL }}
   MagnetURI: ${{ github.event.inputs.MagnetURI }}
   FileIdx: ${{ github.event.inputs.FileIdx }}
@@ -49,7 +47,7 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
         with:
           ref: 'main'
       - name: GitHub Auth
@@ -59,11 +57,6 @@ jobs:
           git_cookies: "no"
         env:
           PAT: ${{ secrets.GH_TOKEN }}
-      - name: Clean Workspace with slimhub_actions
-        if: github.event.inputs.CleanWS == 'true'
-        uses: rokibhasansagar/slimhub_actions@main
-        with:
-          retain: "docker_buildkit"
       - name: Run TorrDLoader Script
         run: |
           # Prepare Custom Env Var Overrides
@@ -78,12 +71,35 @@ jobs:
           # Execute Script Stealthly
           eval 'set -eo pipefail' 2>/dev/null
           eval 'set +o history' 2>/dev/null
-          export latestRevision=$(curl -sL "https://gist.github.com/rokibhasansagar/${TorrDLoader_Hash}/" | grep "/README\.md" | awk -F'/raw/' '{print $2}' | awk -F'/' '{print $1}')
+
+          export baseScrHash="$(git ls-remote -q "${baseScrAddr}" HEAD | awk '{print $1}')"
+          echo -e "latestRevision=${baseScrHash}"
+
+          # Get Scriptlets
+          ( curl -sL "${baseScrAddr}/raw/${baseScrHash}/zSystemdResolved.fix" | bash 2>/dev/null || true )
+          curl -sL "${baseScrAddr}/raw/${baseScrHash}/torrent-to-ms365.base.sh" -o torrent-to-ms365.base.script
+          curl -sL "${baseScrAddr}/raw/${baseScrHash}/zPublicUpload.block" -O
+          curl -sL "${baseScrAddr}/raw/${baseScrHash}/zShareZoneUpload.block" -O
+          curl -sL "${baseScrAddr}/raw/${baseScrHash}/zAniMazeMod.block" -O
+          curl -sL "${baseScrAddr}/raw/${baseScrHash}/zAniMazeUpload.block" -O
+          curl -sL "${baseScrAddr}/raw/${baseScrHash}/zSeed.block" -O
+
+          # Put Together The Complete Script
           case "${JobDestType}" in
-          "AniMaze") export ScriptName="Torrent2AniMaze.sh" ;;
-          "Public") export ScriptName="Torrent2Public.sh" ;;
+            "Public")
+              sed -i -e '/Upload Block/r zPublicUpload.block' ./torrent-to-ms365.base.script
+              ;;
+            "ShareZone")
+              sed -i -e '/Upload Block/r zShareZoneUpload.block' ./torrent-to-ms365.base.script
+              ;;
+            "AniMaze")
+              sed -i -e '/Modification Block/r zAniMazeMod.block' ./torrent-to-ms365.base.script
+              sed -i -e '/Upload Block/r zAniMazeUpload.block' ./torrent-to-ms365.base.script
+              ;;
           esac
-          curl -fsSL "https://gist.github.com/rokibhasansagar/${TorrDLoader_Hash}/raw/${latestRevision}/${ScriptName}" -O
-          source ./${ScriptName}
+          sed -e '/Seed Block/r zSeed.block' ./torrent-to-ms365.base.script >./torrentLoader.sh
+
+          # Run Script
+          source ./torrentLoader.sh
           eval 'set -o history' 2>/dev/null
 
