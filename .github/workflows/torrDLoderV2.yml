@@ -1,0 +1,231 @@
+name: TorrDLoader v2
+
+run-name: "TorrDLoader v2 for ${{ inputs.JobDestType }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      TorrentURL:
+        description: "TorrentURL, https://site.address/file.torrent"
+        required: false
+        type: string
+      MagnetURI:
+        description: "MagnetURI, magnet:?xt=urn:btih:HASH&dn=NAME&tr=TRACKER"
+        required: false
+        type: string
+      FileIdx:
+        description: "FileIdx, Range of Files in Torrent"
+        required: false
+        type: string
+      JobDestType:
+        description: "Destination, Public / ShareZone/ AniMaze"
+        required: true
+        type: choice
+        options:
+        - "Public"
+        - "ShareZone"
+        - "AniMaze"
+      CustomEnvs:
+        description: "Custom Env Vars (pipe-separated), x=a|y=2"
+        type: string
+        required: false
+
+env:
+  baseScrAddr: "https://gist.github.com/rokibhasansagar/654cb52237bcabf6d2f592fc73f43e0e"
+  TorrentURL: ${{ github.event.inputs.TorrentURL }}
+  MagnetURI: ${{ github.event.inputs.MagnetURI }}
+  FileIdx: ${{ github.event.inputs.FileIdx }}
+  JobDestType: ${{ github.event.inputs.JobDestType }}
+  CustomEnvs: ${{ github.event.inputs.CustomEnvs }}
+  TorrDLoader_Hash: ${{ secrets.TorrDLoader_Hash }}
+  RCLONE_CONFIG_HASH: ${{ secrets.RCLONE_CONFIG_HASH }}
+
+jobs:
+  transloader:
+    name: "Torrent Downloader"
+    runs-on: ubuntu-22.04
+
+    outputs:
+      secondPhaser: ${{ steps.set-phaser.outputs.secondPhaser }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 'main'
+      - name: GitHub Auth
+        uses: rokibhasansagar/custom_workflows/git_config@main
+        with:
+          credential: "yes"
+          git_cookies: "no"
+        env:
+          PAT: ${{ secrets.GH_TOKEN }}
+      - name: Pass Custom Env Variables
+        run: |
+          # Prepare Custom Env Var Overrides
+          if [[ ${CustomEnvs} != '' ]]; then
+            for i in $(sed 's/|/\n/g' <<<"${CustomEnvs}"); do
+              v=$(awk -F'=' '{print $1}' <<<"${i}")
+              w=$(cut -d'=' -f2- <<<"${i}" | sed 's#"##g')
+              echo "$v=$w" >>$GITHUB_ENV
+            done
+          fi && unset v w 2>/dev/null
+      - name: Prepare Environment and Generate TorrDLoader Script
+        run: |
+          # Execute Script Stealthly
+          eval 'set -eo pipefail' 2>/dev/null
+          eval 'set +o history' 2>/dev/null
+          _timeCounter() {
+            export timer=${timer:-0}
+            while true; do
+              sleep 59.99s && export timer=$((timer+1))
+            done
+          }
+          _timeCounter 2>/dev/null &
+          # Get latestRevision
+          export baseScrHash="$(git ls-remote -q "${baseScrAddr}" HEAD | awk '{print $1}')"
+          echo -e "latestRevision=${baseScrHash}"
+          # Run xPrepare.sh
+          curl -sL "${baseScrAddr}/raw/${baseScrHash}/xPrepare.sh" -O
+          source ./xPrepare.sh 2>/dev/null || exit 1
+          # Get Scriptlets
+          curl -sL "${baseScrAddr}/raw/${baseScrHash}/torrent-to-ms365.base.sh" -o torrent-to-ms365.base.script
+          curl -sL "${baseScrAddr}/raw/${baseScrHash}/zPublicUpload.block" -O
+          curl -sL "${baseScrAddr}/raw/${baseScrHash}/zShareZoneUpload.block" -O
+          curl -sL "${baseScrAddr}/raw/${baseScrHash}/zAniMazeMod.block" -O
+          curl -sL "${baseScrAddr}/raw/${baseScrHash}/zAniMazeUpload.block" -O
+          curl -sL "${baseScrAddr}/raw/${baseScrHash}/zSeed.block" -O
+          # Make Subdirectory In Cleaned Space
+          mkdir -p /data/media/TorrDLoader
+          # Put Together The Complete Script
+          case "${JobDestType}" in
+            "Public")
+              sed -i -e '/Upload Block/r zPublicUpload.block' ./torrent-to-ms365.base.script
+              ;;
+            "ShareZone")
+              sed -i -e '/Upload Block/r zShareZoneUpload.block' ./torrent-to-ms365.base.script
+              ;;
+            "AniMaze")
+              sed -i -e '/Modification Block/r zAniMazeMod.block' ./torrent-to-ms365.base.script
+              sed -i -e '/Upload Block/r zAniMazeUpload.block' ./torrent-to-ms365.base.script
+              ;;
+          esac
+          sed -e '/Seed Block/r zSeed.block' ./torrent-to-ms365.base.script >/data/media/TorrDLoader/torrentLoader.sh
+          # Pass On The Timer
+          echo "timer=${timer}" >>$GITHUB_ENV
+          eval 'set -o history' 2>/dev/null
+      - name: Run TorrDLoader Script
+        id: set-phaser
+        run: |
+          # Execute Script Stealthly
+          eval 'set -eo pipefail' 2>/dev/null
+          eval 'set +o history' 2>/dev/null
+          _timeCounter() {
+            export timer=${timer:-0}
+            while true; do
+              sleep 59.99s && export timer=$((timer+1))
+            done
+          }
+          _timeCounter 2>/dev/null &
+          # Change Directory To Cleaned Space
+          cd /data/media/TorrDLoader/
+          # Run Script
+          export LIFETIME=$((330-timer))
+          timeout -k 3 ${LIFETIME}m bash /data/media/TorrDLoader/torrentLoader.sh
+          if [[ -f /tmp/torrentLoader.lockfile ]]; then
+            echo "secondPhaser=true" >>$GITHUB_ENV
+            echo "secondPhaser=true" >>$GITHUB_OUTPUT
+          fi
+          eval 'set -o history' 2>/dev/null
+      - name: Upload Incomplete Files As Artifact
+        if: env.secondPhaser == 'true'
+        uses: actions/upload-artifact@v4
+        continue-on-error: true
+        with:
+          name: artifact
+          path: /data/media/TorrDLoader/*
+          retention-days: 3
+          compression-level: 1
+
+  transloader_nxt:
+    if: needs.transloader.outputs.secondPhaser == 'true'
+    name: "Torrent Downloader - Phase 2"
+    runs-on: ubuntu-22.04
+    needs: transloader
+
+    env:
+      secondPhaser: ${{ needs.transloader.outputs.secondPhaser }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 'main'
+      - name: GitHub Auth
+        uses: rokibhasansagar/custom_workflows/git_config@main
+        with:
+          credential: "yes"
+          git_cookies: "no"
+        env:
+          PAT: ${{ secrets.GH_TOKEN }}
+      - name: Pass Custom Env Variables
+        run: |
+          # Prepare Custom Env Var Overrides
+          if [[ ${CustomEnvs} != '' ]]; then
+            for i in $(sed 's/|/\n/g' <<<"${CustomEnvs}"); do
+              v=$(awk -F'=' '{print $1}' <<<"${i}")
+              w=$(cut -d'=' -f2- <<<"${i}" | sed 's#"##g')
+              echo "$v=$w" >>$GITHUB_ENV
+            done
+          fi && unset v w 2>/dev/null
+      - name: Prepare Environment
+        run: |
+          # Execute Script Stealthly
+          eval 'set -eo pipefail' 2>/dev/null
+          eval 'set +o history' 2>/dev/null
+          _timeCounter() {
+            export timer=${timer:-0}
+            while true; do
+              sleep 59.99s && export timer=$((timer+1))
+            done
+          }
+          _timeCounter 2>/dev/null &
+          # Get latestRevision
+          export baseScrHash="$(git ls-remote -q "${baseScrAddr}" HEAD | awk '{print $1}')"
+          echo -e "latestRevision=${baseScrHash}"
+          # Run xPrepare.sh
+          curl -sL "${baseScrAddr}/raw/${baseScrHash}/xPrepare.sh" -O
+          source ./xPrepare.sh 2>/dev/null || exit 1
+          # Make Subdirectory In Cleaned Space
+          mkdir -p /data/media/TorrDLoader
+          # Pass On The Timer
+          echo "timer=${timer}" >>$GITHUB_ENV
+          eval 'set -o history' 2>/dev/null
+      - name: Download Incomplete Files from Artifact
+        if: success()
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: artifact
+          path: /data/media/TorrDLoader/
+      - name: Run TorrDLoader Script, Again
+        run: |
+          # Execute Script Stealthly
+          eval 'set -eo pipefail' 2>/dev/null
+          eval 'set +o history' 2>/dev/null
+          _timeCounter() {
+            export timer=${timer:-0}
+            while true; do
+              sleep 59.99s && export timer=$((timer+1))
+            done
+          }
+          _timeCounter 2>/dev/null &
+          # Change Directory To Cleaned Space
+          cd /data/media/TorrDLoader/
+          tree -a -h -L 3 .
+          # Run Script
+          export LIFETIME=$((320-timer))
+          timeout -k 10 ${LIFETIME}m bash /data/media/TorrDLoader/torrentLoader.sh
+          if [[ -f /tmp/torrentLoader.lockfile ]]; then
+            echo -e "[!] Looks Like Downloading Failed" && exit 1
+          fi
+          eval 'set -o history' 2>/dev/null
+
